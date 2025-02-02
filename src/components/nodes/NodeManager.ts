@@ -7,15 +7,19 @@ import { nodes } from '../../data/tools/index';
 export class NodeManager {
     private scene: THREE.Scene;
     private nodeObjects: Map<string, THREE.Mesh>;
-    private nodeLabels: CSS2DObject[];
+    private nodeLabels: Map<string, CSS2DObject>;
+    private categoryLabels: CSS2DObject[] = [];
     private lines: THREE.Line[];
     private categoryObjects: Map<string, THREE.Mesh>;
     private enableGlow: boolean;
+    private activeNodeId: string | null = null;
+    private highlightedNodeIds: Set<string> = new Set();
+    private connections: Map<string, THREE.Line> = new Map();
 
     constructor(scene: THREE.Scene, enableGlow: boolean = false) {
         this.scene = scene;
         this.nodeObjects = new Map();
-        this.nodeLabels = [];
+        this.nodeLabels = new Map();
         this.lines = [];
         this.categoryObjects = new Map();
         this.enableGlow = enableGlow;
@@ -164,6 +168,7 @@ export class NodeManager {
         const label = new CSS2DObject(labelDiv);
         label.position.set(x, y + 3, z);
         this.scene.add(label);
+        this.categoryLabels.push(label);
     }
 
     private createNodeLabel(node: Node, x: number, y: number, z: number): void {
@@ -178,14 +183,21 @@ export class NodeManager {
         const label = new CSS2DObject(labelDiv);
         label.position.set(x, y + 1, z);
         this.scene.add(label);
-        this.nodeLabels.push(label);
+        this.nodeLabels.set(node.id, label);
     }
 
     private createConnections(): void {
         nodes.forEach(node => {
             const sourcePosition = node.position!;
 
-            node.links.forEach(targetId => {
+            // Create connections for all relationship types
+            const allRelations = [
+                ...node.links || [],
+                ...node.dependencies || [],
+                ...node.alternatives || []
+            ];
+
+            allRelations.forEach(targetId => {
                 const targetNode = nodes.find(n => n.id === targetId);
                 if (targetNode && targetNode.position) {
                     const points = [
@@ -202,9 +214,40 @@ export class NodeManager {
                     
                     const line = new THREE.Line(geometry, material);
                     this.scene.add(line);
-                    this.lines.push(line);
+                    
+                    // Store connection with a unique ID combining both node IDs
+                    const connectionId = [node.id, targetId].sort().join('-');
+                    this.connections.set(connectionId, line);
                 }
             });
+        });
+    }
+
+    private highlightConnections(nodeId: string, visible: boolean): void {
+        const node = nodes.find(n => n.id === nodeId);
+        if (!node) return;
+
+        // Get all related node IDs
+        const relatedIds = new Set([
+            ...node.links || [],
+            ...node.dependencies || [],
+            ...node.alternatives || []
+        ]);
+
+        // Highlight or dim connections
+        this.connections.forEach((line, connectionId) => {
+            const [nodeA, nodeB] = connectionId.split('-');
+            const isRelated = (nodeA === nodeId && relatedIds.has(nodeB)) || 
+                             (nodeB === nodeId && relatedIds.has(nodeA));
+
+            const material = line.material as THREE.LineBasicMaterial;
+            if (isRelated) {
+                material.opacity = visible ? 0.8 : 0.3;
+                material.color.setHex(visible ? 0x88aaff : 0x444444);
+            } else {
+                material.opacity = visible ? 0.1 : 0.3;
+            }
+            material.needsUpdate = true;
         });
     }
 
@@ -218,14 +261,64 @@ export class NodeManager {
     }
 
     public updateLabels(camera: THREE.PerspectiveCamera): void {
-        this.nodeLabels.forEach((label) => {
+        this.nodeLabels.forEach((label, nodeId) => {
+            // If node is highlighted, keep it visible
+            if (this.highlightedNodeIds.has(nodeId)) {
+                label.element.style.display = 'block';
+                label.element.style.opacity = '1';
+                return;
+            }
+
+            // Otherwise apply distance-based visibility
             const distance = camera.position.distanceTo(label.position);
             const opacity = 1 - Math.min(Math.max((distance - 20) / 30, 0), 1);
-            (label.element as HTMLElement).style.opacity = opacity.toString();
+            label.element.style.opacity = opacity.toString();
+            label.element.style.display = opacity > 0 ? 'block' : 'none';
         });
     }
 
     public getNodeObjects(): Map<string, THREE.Mesh> {
         return this.nodeObjects;
+    }
+
+    public showLabel(nodeId: string, visible: boolean): void {
+        const label = this.nodeLabels.get(nodeId);
+        if (label) {
+            label.element.style.display = visible ? 'block' : 'none';
+            label.element.style.opacity = '1';
+            if (visible) {
+                this.highlightedNodeIds.add(nodeId);
+                this.setCategoryLabelsVisibility(false);
+                this.highlightConnections(nodeId, true);
+            } else {
+                this.highlightedNodeIds.delete(nodeId);
+                this.highlightConnections(nodeId, false);
+                if (this.highlightedNodeIds.size === 0) {
+                    this.setCategoryLabelsVisibility(true);
+                }
+            }
+        }
+    }
+
+    public resetLabelVisibility(): void {
+        this.highlightedNodeIds.clear();
+        this.nodeLabels.forEach((label) => {
+            label.element.style.display = 'block';
+        });
+        this.setCategoryLabelsVisibility(true);
+        
+        // Reset all connections
+        this.connections.forEach((line) => {
+            const material = line.material as THREE.LineBasicMaterial;
+            material.opacity = 0.3;
+            material.color.setHex(0x444444);
+            material.needsUpdate = true;
+        });
+    }
+
+    private setCategoryLabelsVisibility(visible: boolean): void {
+        this.categoryLabels.forEach(label => {
+            label.element.style.opacity = visible ? '1' : '0.2';
+        });
     }
 } 

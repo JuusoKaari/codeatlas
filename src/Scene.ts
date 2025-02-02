@@ -23,6 +23,8 @@ export class Scene {
     private nodeManager: NodeManager;
     private uiManager: UIManager;
 
+    private activeNodeId: string | null = null;
+
     constructor(container: HTMLElement) {
         this.clock = new THREE.Clock();
 
@@ -153,6 +155,52 @@ export class Scene {
         this.animate();
     }
 
+    private highlightRelatedNodes(nodeId: string): void {
+        const selectedNode = nodes.find(n => n.id === nodeId);
+        if (!selectedNode) return;
+
+        // Get all related node IDs
+        const relatedNodeIds = new Set([
+            ...selectedNode.dependencies || [],
+            ...selectedNode.alternatives || [],
+            ...selectedNode.links || [],
+            nodeId // Include the selected node itself
+        ]);
+
+        // Dim all nodes
+        for (const [id, nodeMesh] of this.nodeManager.getNodeObjects()) {
+            const material = (nodeMesh as THREE.Mesh).material as THREE.MeshStandardMaterial;
+            if (relatedNodeIds.has(id)) {
+                // Highlight related nodes
+                material.opacity = 1;
+                material.emissive.setHex(0x666666);
+                this.nodeManager.showLabel(id, true); // Force show label
+            } else {
+                // Dim unrelated nodes
+                material.opacity = 0.3;
+                material.emissive.setHex(0x000000);
+                this.nodeManager.showLabel(id, false); // Hide label
+            }
+            material.needsUpdate = true;
+        }
+
+        this.activeNodeId = nodeId;
+    }
+
+    private resetNodeHighlighting(): void {
+        // Reset all nodes to their original state
+        for (const [id, nodeMesh] of this.nodeManager.getNodeObjects()) {
+            const material = (nodeMesh as THREE.Mesh).material as THREE.MeshStandardMaterial;
+            material.opacity = 1;
+            material.emissive.setHex(0x000000);
+            material.needsUpdate = true;
+        }
+        
+        this.activeNodeId = null;
+        // Let the normal label visibility system take over
+        this.nodeManager.resetLabelVisibility();
+    }
+
     private onClick(event: MouseEvent): void {
         if (!this.cameraController.isInLookMode()) {
             this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
@@ -171,9 +219,18 @@ export class Scene {
                 if (clickedNodeId) {
                     const node = nodes.find(n => n.id === clickedNodeId);
                     if (node) {
+                        // If clicking the same node again, reset the highlighting
+                        if (this.activeNodeId === clickedNodeId) {
+                            this.resetNodeHighlighting();
+                        } else {
+                            this.highlightRelatedNodes(clickedNodeId);
+                        }
                         this.uiManager.showNodeInfo(node);
                     }
                 }
+            } else {
+                // Clicked empty space - reset highlighting
+                this.resetNodeHighlighting();
             }
         }
     }
